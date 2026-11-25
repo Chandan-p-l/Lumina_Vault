@@ -1,0 +1,68 @@
+{
+  "name": "lumina-photo-vault",
+  "version": "1.0.0",
+  "private": true,
+  "author": "Lumina Vault",
+  "homepage": "https://github.com/lumina-vault/lumina-vault",
+  "description": "Local AI-powered Photo & Video Organizer and Semantic Search with Gemini API",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -n server,client -c cyan,magenta \"npm --prefix server run dev\" \"npm --prefix client run dev\"",
+    "build": "npm --prefix server run build && npm --prefix client run build",
+    "start": "npm --prefix server run start",
+    "desktop": "npm run build && electron .",
+    "dist:linux": "npm run build && electron-builder --linux",
+    "dist:win": "npm run build && electron-builder --win",
+    "install:all": "npm install && npm --prefix server install && npm --prefix client install"
+  },
+  "build": {
+    "appId": "com.luminavault.app",
+    "productName": "Lumina Vault",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "electron/**/*",
+      "client/dist/**/*",
+      "server/dist/**/*",
+      "server/package.json",
+      "server/node_modules/**/*",
+      "package.json",
+      "!**/.photovault/**",
+      "!**/.env"
+    ],
+    "asarUnpack": [
+      "server/node_modules/sharp/**/*",
+      "server/node_modules/@img/**/*",
+      "server/node_modules/@ffmpeg-installer/**/*",
+      "server/node_modules/@ffprobe-installer/**/*"
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Graphics;Photography",
+      "maintainer": "Lumina Vault <support@luminavault.local>",
+      "synopsis": "AI Photo & Video Organizer with Gemini Search",
+      "description": "Connect any folder to automatically organize photos and videos into separate folders and search them using natural language with the Gemini API."
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "electron": "^40.0.0",
+    "electron-builder": "^26.0.12"
+  }
+}

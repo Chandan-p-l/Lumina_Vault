@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/api.ts","./src/main.tsx","./src/types.ts","./src/components/FolderPickerModal.tsx","./src/components/IndexingHUD.tsx","./src/components/Lightbox.tsx","./src/components/MediaGrid.tsx","./src/components/SearchHeader.tsx","./src/components/SettingsModal.tsx","./src/components/Sidebar.tsx","./src/components/SortStudio.tsx"],"version":"5.9.3"}

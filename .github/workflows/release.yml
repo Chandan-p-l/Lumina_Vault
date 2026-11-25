@@ -1,0 +1,38 @@
+name: Build Desktop Installers (Linux & Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm run install:all
+
+      - name: Build Linux installers (.AppImage & .deb)
+        if: matrix.os == 'ubuntu-latest'
+        run: npm run dist:linux
+
+      - name: Build Windows installers (.exe Setup & Portable)
+        if: matrix.os == 'windows-latest'
+        run: npm run dist:win
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: lumina-vault-${{ matrix.os }}
+          path: release/*

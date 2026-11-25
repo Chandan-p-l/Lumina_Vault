@@ -1,0 +1,12 @@
+node_modules/
+dist/
+release/
+server/dist/
+client/dist/
+.env
+server/.env
+.photovault/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
