@@ -498,6 +498,10 @@ export async function scanFolder(
       folderId
     );
 
+    // Mark scan complete BEFORE launching background AI indexing / auto-organize pipeline
+    scanProgress.scanning = false;
+    scanProgress.currentFile = null;
+
     if (onNewMediaQueued) {
       await onNewMediaQueued();
     }

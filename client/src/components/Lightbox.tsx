@@ -4,20 +4,21 @@ import {
   Camera,
   ChevronLeft,
   ChevronRight,
+  Eye,
   FileText,
   Folder,
   Heart,
   Loader2,
   MapPin,
   RefreshCw,
-  Sparkles,
   Tag,
   X,
   ZoomIn,
   ZoomOut,
 } from 'lucide-react';
 import { api } from '../api';
-import type { MediaItem } from '../types';
+import type { MediaItem, MediaTelemetry } from '../types';
+import { ImageSpectrogramPanel } from './ImageSpectrogramPanel';
 
 interface LightboxProps {
   item: MediaItem;
@@ -49,6 +50,8 @@ export function Lightbox({
   const [reindexing, setReindexing] = useState(false);
   const [similar, setSimilar] = useState<MediaItem[]>([]);
   const [loadingSimilar, setLoadingSimilar] = useState(false);
+  const [telemetry, setTelemetry] = useState<MediaTelemetry | null>(null);
+  const [loadingTelemetry, setLoadingTelemetry] = useState(false);
 
   const currentIdx = items.findIndex((i) => i.id === item.id);
   const hasPrev = currentIdx > 0;
@@ -57,8 +60,10 @@ export function Lightbox({
   useEffect(() => {
     setZoomed(false);
     setSimilar([]);
+    setTelemetry(null);
     let cancelled = false;
     setLoadingSimilar(true);
+    setLoadingTelemetry(true);
     api
       .getSimilar(item.id)
       .then((res) => {
@@ -67,6 +72,15 @@ export function Lightbox({
       .catch(() => {})
       .finally(() => {
         if (!cancelled) setLoadingSimilar(false);
+      });
+    api
+      .getTelemetry(item.id)
+      .then((res) => {
+        if (!cancelled) setTelemetry(res);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoadingTelemetry(false);
       });
     return () => {
       cancelled = true;
@@ -185,9 +199,9 @@ export function Lightbox({
         {/* Gemini AI Analysis Section */}
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-violet-300">
-              <Sparkles className="w-3.5 h-3.5" />
-              Gemini Vision Insights
+            <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-300">
+              <Eye className="w-3.5 h-3.5" />
+              Scene Insights
             </h3>
             <button
               onClick={handleReindex}
@@ -252,6 +266,13 @@ export function Lightbox({
             </div>
           )}
         </div>
+
+        {/* White Balance & Image Spectrogram */}
+        <ImageSpectrogramPanel
+          imageUrl={item.thumbUrl || (item.mediaType === 'photo' ? item.fileUrl : null)}
+          telemetry={telemetry}
+          loadingTelemetry={loadingTelemetry}
+        />
 
         {/* File & EXIF Details */}
         <div className="space-y-2.5">

@@ -1,5 +1,11 @@
+import { loadSettings } from './config.js';
 import { db, MediaRow } from './db.js';
-import { embedText, verifyCandidatesWithGemini } from './gemini.js';
+import {
+  embedText,
+  indexingState,
+  startIndexingQueue,
+  verifyCandidatesWithGemini,
+} from './gemini.js';
 
 export interface SearchOptions {
   query: string;
@@ -70,16 +76,49 @@ const STOP_WORDS = new Set([
   'from',
 ]);
 
+const SYNONYM_MAP: Record<string, string[]> = {
+  dog: ['dog', 'puppy', 'pup', 'canine', 'retriever', 'hound', 'pet'],
+  cat: ['cat', 'kitten', 'kitty', 'feline', 'pet'],
+  sitting: ['sitting', 'sit', 'seated', 'crouching', 'resting'],
+  smiling: ['smiling', 'smile', 'happy', 'laughing', 'grinning'],
+  beach: ['beach', 'ocean', 'sea', 'coast', 'shore', 'sand'],
+  car: ['car', 'vehicle', 'auto', 'sedan', 'suv', 'driving'],
+  food: ['food', 'meal', 'dish', 'dinner', 'lunch', 'breakfast', 'plate', 'eating'],
+  night: ['night', 'evening', 'dark', 'lights', 'neon'],
+  receipt: ['receipt', 'invoice', 'bill', 'document', 'paper'],
+  document: ['document', 'receipt', 'text', 'paper', 'screenshot', 'note'],
+  person: ['person', 'man', 'woman', 'boy', 'girl', 'people', 'portrait', 'selfie'],
+};
+
+function stemToken(word: string): string {
+  if (word.length > 5 && word.endsWith('ing')) return word.slice(0, -3);
+  if (word.length > 4 && word.endsWith('ed')) return word.slice(0, -2);
+  if (word.length > 4 && word.endsWith('es')) return word.slice(0, -2);
+  if (word.length > 3 && word.endsWith('s')) return word.slice(0, -1);
+  return word;
+}
+
 function extractKeywords(query: string): string[] {
-  return query
+  const base = query
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
     .split(/\s+/)
     .filter((w) => w.length >= 2 && !STOP_WORDS.has(w));
+
+  const expanded = new Set<string>();
+  for (const w of base) {
+    expanded.add(w);
+    expanded.add(stemToken(w));
+    const syns = SYNONYM_MAP[w];
+    if (syns) {
+      for (const s of syns) expanded.add(s);
+    }
+  }
+  return Array.from(expanded);
 }
 
-function lexicalScore(row: MediaRow, keywords: string[]): number {
-  if (keywords.length === 0) return 0;
+function lexicalScore(row: MediaRow, baseWords: string[], expandedWords: string[]): number {
+  if (baseWords.length === 0) return 0;
   const haystack = [
     row.filename,
     row.ai_caption || '',
@@ -93,19 +132,33 @@ function lexicalScore(row: MediaRow, keywords: string[]): number {
     .join(' ')
     .toLowerCase();
 
-  let matched = 0;
-  for (const kw of keywords) {
-    if (haystack.includes(kw)) matched++;
+  let exactMatched = 0;
+  for (const kw of baseWords) {
+    if (haystack.includes(kw) || haystack.includes(stemToken(kw))) exactMatched++;
   }
-  return matched / keywords.length;
+
+  let expandedMatched = 0;
+  for (const kw of expandedWords) {
+    if (haystack.includes(kw)) expandedMatched++;
+  }
+
+  const exactRatio = exactMatched / baseWords.length;
+  const expandedRatio = Math.min(1, expandedMatched / Math.max(1, baseWords.length * 1.5));
+  return Math.max(exactRatio, expandedRatio * 0.75);
 }
 
 export async function semanticSearch(options: SearchOptions): Promise<{
   hits: SearchHit[];
   usedAiVerify: boolean;
   usedEmbeddings: boolean;
+  pendingCount: number;
+  hasApiKey: boolean;
+  warning?: string;
 }> {
   const limit = options.limit || 60;
+  const settings = loadSettings();
+  const hasApiKey = Boolean(settings.apiKey);
+
   const conditions: string[] = [];
   const params: Array<string | number> = [];
 
@@ -138,6 +191,14 @@ export async function semanticSearch(options: SearchOptions): Promise<{
     .prepare(`SELECT * FROM media ${whereClause} ORDER BY captured_at DESC`)
     .all(...params) as unknown as MediaRow[];
 
+  const pendingRows = allRows.filter((r) => r.ai_status !== 'indexed');
+  const pendingCount = pendingRows.length;
+
+  // Auto-kick background AI indexing if user searches while items are still pending
+  if (pendingCount > 0 && hasApiKey && !indexingState.running) {
+    void startIndexingQueue(false);
+  }
+
   const query = options.query.trim();
   if (!query) {
     return {
@@ -148,26 +209,35 @@ export async function semanticSearch(options: SearchOptions): Promise<{
       })),
       usedAiVerify: false,
       usedEmbeddings: false,
+      pendingCount,
+      hasApiKey,
     };
   }
 
-  const keywords = extractKeywords(query);
+  const baseWords = query
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 2 && !STOP_WORDS.has(w));
+  const expandedWords = extractKeywords(query);
 
-  // Detect implicit media-type hint if user explicitly wrote "video" or "photo"
   const qLower = query.toLowerCase();
   const wantsVideo = /\bvideos?\b/.test(qLower);
   const wantsPhoto = /\b(photos?|pictures?|images?)\b/.test(qLower);
 
-  // FTS5 fast boost map
   const ftsScores = new Map<number, number>();
-  if (keywords.length > 0) {
+  if (expandedWords.length > 0) {
     try {
-      const ftsQuery = keywords.map((k) => `"${k}"*`).join(' OR ');
+      const ftsQuery = expandedWords
+        .slice(0, 12)
+        .map((k) => `"${k}"*`)
+        .join(' OR ');
       const ftsRows = db
-        .prepare('SELECT media_id, bm25(media_fts) as rank FROM media_fts WHERE media_fts MATCH ? LIMIT 200')
+        .prepare(
+          'SELECT media_id, bm25(media_fts) as rank FROM media_fts WHERE media_fts MATCH ? LIMIT 250'
+        )
         .all(ftsQuery) as Array<{ media_id: number; rank: number }>;
       for (const r of ftsRows) {
-        // bm25 is negative (more negative = better)
         ftsScores.set(r.media_id, Math.min(1, Math.abs(r.rank) / 10 + 0.35));
       }
     } catch {
@@ -175,13 +245,14 @@ export async function semanticSearch(options: SearchOptions): Promise<{
     }
   }
 
-  // Query embedding
   let queryVec: number[] | null = null;
-  try {
-    const emb = await embedText(query);
-    if (emb) queryVec = emb.vector;
-  } catch {
-    queryVec = null;
+  if (hasApiKey) {
+    try {
+      const emb = await embedText(query);
+      if (emb) queryVec = emb.vector;
+    } catch {
+      queryVec = null;
+    }
   }
 
   const scored = allRows.map((row) => {
@@ -195,17 +266,18 @@ export async function semanticSearch(options: SearchOptions): Promise<{
       }
     }
 
-    const lex = lexicalScore(row, keywords);
+    const lex = lexicalScore(row, baseWords, expandedWords);
     const fts = ftsScores.get(row.id) || 0;
 
     let typeBonus = 0;
     if (wantsVideo && row.media_type === 'video') typeBonus = 0.08;
     if (wantsPhoto && row.media_type === 'photo') typeBonus = 0.05;
 
+    // Score each item using the strongest available signals (don't penalize un-embedded items)
     const combined =
       queryVec && row.embedding_json
-        ? vecSim * 0.62 + lex * 0.25 + fts * 0.13 + typeBonus
-        : lex * 0.65 + fts * 0.35 + typeBonus;
+        ? Math.max(vecSim * 0.72 + lex * 0.2 + fts * 0.08, lex * 0.75 + fts * 0.25) + typeBonus
+        : lex * 0.7 + fts * 0.3 + typeBonus;
 
     return {
       media: row,
@@ -218,25 +290,43 @@ export async function semanticSearch(options: SearchOptions): Promise<{
   scored.sort((a, b) => b.rawScore - a.rawScore);
 
   const candidates = scored
-    .filter((s) => s.rawScore > (queryVec ? 0.22 : 0.08))
-    .slice(0, 24);
+    .filter((s) => s.rawScore > (queryVec ? 0.26 : 0.08) || s.lex > 0.25)
+    .slice(0, 36);
 
-  // If no strong indexed matches yet, pass recent/unindexed items if AI verify is requested
-  const verifyPool =
-    candidates.length > 0
-      ? candidates.map((c) => c.media)
-      : options.aiVerify
-        ? allRows.slice(0, 12)
-        : [];
+  // Build verification pool: top hybrid candidates + up to 24 unindexed items so immediate search still works
+  const verifyMap = new Map<number, MediaRow>();
+  for (const c of candidates) {
+    verifyMap.set(c.media.id, c.media);
+  }
+  if (options.aiVerify && hasApiKey && pendingRows.length > 0 && verifyMap.size < 36) {
+    for (const p of pendingRows) {
+      if (verifyMap.size >= 36) break;
+      verifyMap.set(p.id, p);
+    }
+  }
+  if (options.aiVerify && hasApiKey && verifyMap.size === 0) {
+    for (const r of allRows.slice(0, 36)) {
+      verifyMap.set(r.id, r);
+    }
+  }
 
-  if (options.aiVerify && verifyPool.length > 0) {
+  const verifyPool = Array.from(verifyMap.values());
+  let warning: string | undefined;
+
+  if (!hasApiKey && pendingCount > 0) {
+    warning =
+      'Gemini API key is not configured — searching filenames only. Add your API key in Settings for visual AI search.';
+  } else if (pendingCount > 0) {
+    warning = `${pendingCount} item${pendingCount === 1 ? '' : 's'} still indexing in background; checked top items visually.`;
+  }
+
+  if (options.aiVerify && hasApiKey && verifyPool.length > 0) {
     try {
       const verified = await verifyCandidatesWithGemini(query, verifyPool);
       if (verified.length > 0) {
-        const byId = new Map(verifyPool.map((m) => [m.id, m]));
         const verifiedHits: SearchHit[] = [];
         for (const v of verified.sort((a, b) => b.score - a.score)) {
-          const media = byId.get(v.id);
+          const media = verifyMap.get(v.id);
           if (media) {
             verifiedHits.push({
               media,
@@ -250,11 +340,16 @@ export async function semanticSearch(options: SearchOptions): Promise<{
             hits: verifiedHits.slice(0, limit),
             usedAiVerify: true,
             usedEmbeddings: Boolean(queryVec),
+            pendingCount,
+            hasApiKey,
+            warning,
           };
         }
       }
     } catch (err) {
-      console.warn('Gemini verify fallback to hybrid scores:', err);
+      warning = `Gemini Vision verify unavailable (${
+        err instanceof Error ? err.message : 'API error'
+      }); showing indexed keyword/embedding matches.`;
     }
   }
 
@@ -268,11 +363,14 @@ export async function semanticSearch(options: SearchOptions): Promise<{
     hits,
     usedAiVerify: false,
     usedEmbeddings: Boolean(queryVec),
+    pendingCount,
+    hasApiKey,
+    warning,
   };
 }
 
 export function findSimilarMedia(mediaId: number, limit = 18): SearchHit[] {
-  const target = db.prepare('SELECT * FROM media WHERE id = ?').get(mediaId) as
+  const target = db.prepare('SELECT * FROM media WHERE id = ?').get(mediaId) as unknown as
     | MediaRow
     | undefined;
   if (!target) return [];

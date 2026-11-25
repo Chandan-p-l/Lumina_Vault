@@ -4,7 +4,7 @@ import { loadSettings } from './config.js';
 import { db, FolderRow } from './db.js';
 import { startIndexingQueue } from './gemini.js';
 import { PHOTO_EXTS, scanFolder, scanProgress, VIDEO_EXTS } from './scanner.js';
-import { autoOrganizeFolder, recentManagedPaths } from './sorter.js';
+import { autoOrganizeFolder, executeSortPlan, recentManagedPaths, SortPreset, SortRuleConfig } from './sorter.js';
 
 const activeWatchers = new Map<number, fs.FSWatcher>();
 const debounceTimers = new Map<number, NodeJS.Timeout>();
@@ -38,14 +38,45 @@ export async function runFolderPipeline(folderId: number): Promise<void> {
     if (!refreshed) return;
 
     const needsAiFirst =
-      refreshed.auto_organize === 1 && refreshed.organize_preset === 'media-type-category';
+      refreshed.auto_organize === 1 &&
+      (refreshed.organize_preset === 'media-type-category' ||
+        refreshed.organize_preset === 'year-category' ||
+        refreshed.organize_preset === 'category-year' ||
+        (refreshed.organize_rule_json || '').includes('{category}'));
+
+    const organizeBatchOnDisk = (mediaIds: number[]) => {
+      const latest = db.prepare('SELECT * FROM folders WHERE id = ?').get(folderId) as unknown as
+        | FolderRow
+        | undefined;
+      if (!latest || latest.auto_organize !== 1 || mediaIds.length === 0) return;
+      let customRule: Partial<SortRuleConfig> = {};
+      if (latest.organize_rule_json) {
+        try {
+          customRule = JSON.parse(latest.organize_rule_json) as Partial<SortRuleConfig>;
+        } catch {
+          customRule = {};
+        }
+      }
+      executeSortPlan({
+        preset: (customRule.preset || latest.organize_preset || 'media-type') as SortPreset,
+        folderPattern: customRule.folderPattern,
+        filenamePattern: customRule.filenamePattern,
+        mediaFilter: customRule.mediaFilter,
+        duplicatePolicy: customRule.duplicatePolicy,
+        separateScreenshots: customRule.separateScreenshots,
+        targetRoot: latest.organize_target || latest.path,
+        mode: 'move',
+        mediaIds,
+        cleanupEmptyDirs: true,
+      });
+    };
 
     if ((settings.autoIndexOnScan || needsAiFirst) && settings.apiKey) {
       if (needsAiFirst) {
-        // Wait for Gemini classification before moving into AI Category folders
-        await startIndexingQueue(false);
+        // Organize each batch live on disk as Gemini finishes classifying it
+        await startIndexingQueue(false, organizeBatchOnDisk);
       } else {
-        void startIndexingQueue(false);
+        void startIndexingQueue(false, organizeBatchOnDisk);
       }
     }
 

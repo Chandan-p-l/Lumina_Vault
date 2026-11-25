@@ -13,7 +13,7 @@ export function SettingsModal({ open, onClose, onSaved }: SettingsModalProps) {
   const [settings, setSettings] = useState<SettingsData | null>(null);
   const [newApiKey, setNewApiKey] = useState('');
   const [apiMode, setApiMode] = useState<'auto' | 'gemini' | 'vertex'>('auto');
-  const [visionModel, setVisionModel] = useState('gemini-2.5-flash');
+  const [visionModel, setVisionModel] = useState('gemini-3.5-flash-lite');
   const [concurrency, setConcurrency] = useState(3);
   const [autoIndexOnScan, setAutoIndexOnScan] = useState(true);
   const [testing, setTesting] = useState(false);
@@ -147,9 +147,11 @@ export function SettingsModal({ open, onClose, onSaved }: SettingsModalProps) {
                 onChange={(e) => setVisionModel(e.target.value)}
                 className="w-full px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-200 outline-none"
               >
-                <option value="gemini-2.5-flash">gemini-2.5-flash (Fast & Accurate)</option>
+                <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (Recommended)</option>
+                <option value="gemini-3.1-flash-lite">gemini-3.1-flash-lite (Fast)</option>
+                <option value="gemini-3.8-flash">gemini-3.8-flash</option>
+                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
                 <option value="gemini-2.5-pro">gemini-2.5-pro (Deep Reasoning)</option>
-                <option value="gemini-2.0-flash">gemini-2.0-flash</option>
               </select>
             </div>
           </div>

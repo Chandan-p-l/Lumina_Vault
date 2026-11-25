@@ -1,11 +1,15 @@
 import type {
   BrowseResponse,
+  DuplicatePolicy,
+  FilenamePattern,
   FolderItem,
   MediaItem,
+  MediaTelemetry,
   SettingsData,
   SortHistoryItem,
   SortPlanResult,
   SortPreset,
+  SortRuleConfig,
   VaultStatus,
 } from './types';
 
@@ -35,6 +39,7 @@ export const api = {
     organizePreset?: SortPreset;
     organizeTarget?: string | null;
     watchEnabled?: boolean;
+    organizeRule?: SortRuleConfig;
   }) =>
     request<{ folder: FolderItem }>('/api/folders', {
       method: 'POST',
@@ -56,7 +61,7 @@ export const api = {
     }),
 
   organizeFolderNow: (id: number) =>
-    request<{ operationId: string; processed: number; targetRoot: string }>(
+    request<{ started: boolean; folderId: number }>(
       `/api/folders/${id}/organize`,
       { method: 'POST' }
     ),
@@ -113,7 +118,14 @@ export const api = {
     favoriteOnly?: boolean;
     aiVerify?: boolean;
   }) =>
-    request<{ items: MediaItem[]; usedAiVerify: boolean; usedEmbeddings: boolean }>('/api/search', {
+    request<{
+      items: MediaItem[];
+      usedAiVerify: boolean;
+      usedEmbeddings: boolean;
+      pendingCount: number;
+      hasApiKey: boolean;
+      warning?: string;
+    }>('/api/search', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
@@ -126,6 +138,8 @@ export const api = {
 
   getSimilar: (id: number) => request<{ items: MediaItem[] }>(`/api/media/${id}/similar`),
 
+  getTelemetry: (id: number) => request<MediaTelemetry>(`/api/media/${id}/telemetry`),
+
   startAiIndexing: (includeErrors = false) =>
     request<{ ok: boolean }>('/api/ai/index/start', {
       method: 'POST',
@@ -134,9 +148,31 @@ export const api = {
 
   pauseAiIndexing: () => request<{ ok: boolean }>('/api/ai/index/pause', { method: 'POST' }),
 
+  parseSortPrompt: (prompt: string) =>
+    request<{
+      folderPattern: string;
+      filenamePattern: FilenamePattern;
+      mediaFilter: 'all' | 'photo' | 'video';
+      duplicatePolicy: DuplicatePolicy;
+      separateScreenshots: boolean;
+      classifyFirst: boolean;
+      mode: 'copy' | 'move';
+      explanation: string;
+      usedGemini: boolean;
+    }>('/api/sort/parse-prompt', {
+      method: 'POST',
+      body: JSON.stringify({ prompt }),
+    }),
+
   planSort: (payload: {
     preset: SortPreset;
     targetRoot: string;
+    folderPattern?: string;
+    filenamePattern?: FilenamePattern;
+    mediaFilter?: 'all' | 'photo' | 'video';
+    duplicatePolicy?: DuplicatePolicy;
+    separateScreenshots?: boolean;
+    classifyFirst?: boolean;
     folderId?: number | null;
     mediaIds?: number[];
   }) =>
@@ -149,6 +185,12 @@ export const api = {
     preset: SortPreset;
     targetRoot: string;
     mode: 'copy' | 'move';
+    folderPattern?: string;
+    filenamePattern?: FilenamePattern;
+    mediaFilter?: 'all' | 'photo' | 'video';
+    duplicatePolicy?: DuplicatePolicy;
+    separateScreenshots?: boolean;
+    classifyFirst?: boolean;
     folderId?: number | null;
     mediaIds?: number[];
   }) =>

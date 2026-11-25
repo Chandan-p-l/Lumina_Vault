@@ -1,4 +1,4 @@
-import { AlertTriangle, Loader2, Pause, Play, Sparkles } from 'lucide-react';
+import { AlertTriangle, Loader2, Pause, Play } from 'lucide-react';
 import { api } from '../api';
 import type { VaultStatus } from '../types';
 
@@ -19,7 +19,7 @@ export function IndexingHUD({ status, onRefresh, onOpenSettings }: IndexingHUDPr
   if (!showScan && !showIndex && !hasPending) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-40 max-w-sm w-[calc(100vw-2rem)] rounded-2xl bg-zinc-900/95 backdrop-blur-xl border border-zinc-800 shadow-2xl p-3.5 space-y-2.5">
+    <div className="fixed bottom-20 lg:bottom-4 right-4 z-40 max-w-sm w-[calc(100vw-2rem)] rounded-2xl bg-[#111317]/95 border border-white/15 shadow-2xl p-3.5 space-y-2.5">
       {showScan && (
         <div className="space-y-1.5">
           <div className="flex items-center justify-between text-xs">
@@ -52,9 +52,9 @@ export function IndexingHUD({ status, onRefresh, onOpenSettings }: IndexingHUDPr
       {showIndex ? (
         <div className="space-y-1.5">
           <div className="flex items-center justify-between text-xs">
-            <span className="flex items-center gap-2 font-semibold text-violet-300">
-              <Sparkles className="w-3.5 h-3.5 animate-pulse" />
-              Gemini AI Indexing
+            <span className="flex items-center gap-2 font-semibold text-zinc-100">
+              <Loader2 className="w-3.5 h-3.5 text-[#b8f34d] animate-spin" />
+              Indexing Library
             </span>
             <div className="flex items-center gap-2">
               <span className="text-zinc-400">

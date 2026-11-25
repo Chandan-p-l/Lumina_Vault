@@ -3,7 +3,9 @@ import type { Server } from 'node:http';
 import path from 'node:path';
 import cors from 'cors';
 import express from 'express';
+import exifr from 'exifr';
 import multer from 'multer';
+import sharp from 'sharp';
 import {
   loadSettings,
   maskApiKey,
@@ -17,6 +19,7 @@ import { browseDirectory } from './fsBrowser.js';
 import {
   analyzeMediaItem,
   indexingState,
+  parseSortPromptWithGemini,
   pauseIndexing,
   startIndexingQueue,
   testGeminiConnection,
@@ -28,6 +31,7 @@ import {
   buildSortPlan,
   executeSortPlan,
   SortPreset,
+  sortProgress,
   undoSortOperation,
 } from './sorter.js';
 import {
@@ -176,6 +180,7 @@ export function createApp() {
       timeline,
       scanProgress,
       indexingState,
+      sortProgress,
       hasApiKey: Boolean(loadSettings().apiKey),
     });
   });
@@ -223,6 +228,9 @@ export function createApp() {
         ? path.resolve(String(req.body.organizeTarget))
         : null;
       const watchEnabled = req.body?.watchEnabled || autoOrganize ? 1 : 0;
+      const organizeRuleJson = req.body?.organizeRule
+        ? JSON.stringify(req.body.organizeRule)
+        : null;
 
       const existing = db.prepare('SELECT * FROM folders WHERE path = ?').get(resolved) as unknown as
         | FolderRow
@@ -232,13 +240,20 @@ export function createApp() {
       if (existing) {
         folderId = existing.id;
         db.prepare(
-          `UPDATE folders SET auto_organize = ?, organize_preset = ?, organize_target = ?, watch_enabled = ? WHERE id = ?`
-        ).run(autoOrganize, organizePreset, organizeTarget, watchEnabled, folderId);
+          `UPDATE folders SET auto_organize = ?, organize_preset = ?, organize_target = ?, watch_enabled = ?, organize_rule_json = ? WHERE id = ?`
+        ).run(
+          autoOrganize,
+          organizePreset,
+          organizeTarget,
+          watchEnabled,
+          organizeRuleJson,
+          folderId
+        );
       } else {
         const result = db
           .prepare(
-            `INSERT INTO folders (path, name, added_at, status, auto_organize, organize_preset, organize_target, watch_enabled)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+            `INSERT INTO folders (path, name, added_at, status, auto_organize, organize_preset, organize_target, watch_enabled, organize_rule_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .run(
             resolved,
@@ -248,7 +263,8 @@ export function createApp() {
             autoOrganize,
             organizePreset,
             organizeTarget,
-            watchEnabled
+            watchEnabled,
+            organizeRuleJson
           );
         folderId = Number(result.lastInsertRowid);
       }
@@ -310,8 +326,22 @@ export function createApp() {
   app.post('/api/folders/:id/organize', (req, res) => {
     try {
       const id = Number(req.params.id);
-      const result = autoOrganizeFolder(id);
-      res.json(result);
+      const folder = db.prepare('SELECT * FROM folders WHERE id = ?').get(id) as unknown as
+        | FolderRow
+        | undefined;
+      if (!folder) {
+        res.status(404).json({ error: 'Folder not found' });
+        return;
+      }
+      // Run asynchronously in background so UI can present live folder generation & sorting immediately
+      setImmediate(() => {
+        try {
+          autoOrganizeFolder(id);
+        } catch (err) {
+          console.error('Background organize error:', err);
+        }
+      });
+      res.json({ started: true, folderId: id });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
     }
@@ -512,6 +542,169 @@ export function createApp() {
     });
   });
 
+  // ---------- Image White Balance & Exposure Telemetry ----------
+  app.get('/api/media/:id/telemetry', async (req, res) => {
+    const id = Number(req.params.id);
+    const row = db.prepare('SELECT * FROM media WHERE id = ?').get(id) as unknown as
+      | MediaRow
+      | undefined;
+    if (!row) {
+      res.status(404).json({ error: 'Media not found' });
+      return;
+    }
+
+    let exifWb: string | null = null;
+    let lightSource: string | null = null;
+    let colorSpace: string | null = null;
+    let iso: number | null = null;
+    let fNumber: number | null = null;
+    let exposureTime: number | null = null;
+    let focalLength: number | null = null;
+
+    if (row.media_type === 'photo' && fs.existsSync(row.path)) {
+      try {
+        const exif = await exifr.parse(row.path, {
+          pick: [
+            'WhiteBalance',
+            'LightSource',
+            'ColorSpace',
+            'ISO',
+            'FNumber',
+            'ExposureTime',
+            'FocalLength',
+          ],
+        });
+        if (exif) {
+          if (exif.WhiteBalance !== undefined) {
+            exifWb =
+              exif.WhiteBalance === 0 || String(exif.WhiteBalance).toLowerCase().includes('auto')
+                ? 'Auto'
+                : exif.WhiteBalance === 1 ||
+                    String(exif.WhiteBalance).toLowerCase().includes('manual')
+                  ? 'Manual'
+                  : String(exif.WhiteBalance);
+          }
+          if (exif.LightSource !== undefined) lightSource = String(exif.LightSource);
+          if (exif.ColorSpace !== undefined) {
+            colorSpace = exif.ColorSpace === 1 ? 'sRGB' : String(exif.ColorSpace);
+          }
+          if (typeof exif.ISO === 'number') iso = exif.ISO;
+          if (typeof exif.FNumber === 'number') fNumber = exif.FNumber;
+          if (typeof exif.ExposureTime === 'number') exposureTime = exif.ExposureTime;
+          if (typeof exif.FocalLength === 'number') focalLength = exif.FocalLength;
+        }
+      } catch {
+        // ignore optional EXIF errors
+      }
+    }
+
+    const analysisPath =
+      row.media_type === 'photo' && fs.existsSync(row.path)
+        ? row.path
+        : row.thumb_path
+          ? path.join(THUMBS_DIR, row.thumb_path)
+          : null;
+
+    let kelvin = 5500;
+    let tempLabel = 'Neutral Daylight';
+    let tint = 0;
+    let rgbMeans = { r: 128, g: 128, b: 128 };
+    let rgbGains = { r: 1, g: 1, b: 1 };
+
+    if (analysisPath && fs.existsSync(analysisPath)) {
+      try {
+        const { data, info } = await sharp(analysisPath, { failOn: 'none' })
+          .rotate()
+          .resize(128, 128, { fit: 'inside' })
+          .removeAlpha()
+          .raw()
+          .toBuffer({ resolveWithObject: true });
+
+        let sumR = 0;
+        let sumG = 0;
+        let sumB = 0;
+        const pixels = info.width * info.height;
+        for (let i = 0; i < data.length; i += 3) {
+          sumR += data[i];
+          sumG += data[i + 1];
+          sumB += data[i + 2];
+        }
+
+        if (pixels > 0) {
+          const r = sumR / pixels;
+          const g = sumG / pixels;
+          const b = sumB / pixels;
+          rgbMeans = {
+            r: Math.round(r),
+            g: Math.round(g),
+            b: Math.round(b),
+          };
+          const safeG = Math.max(1, g);
+          rgbGains = {
+            r: Number((r / safeG).toFixed(2)),
+            g: 1.0,
+            b: Number((b / safeG).toFixed(2)),
+          };
+
+          // Linearize sRGB -> CIE XYZ -> xy chromaticity -> McCamy CCT
+          const toLin = (c: number) => {
+            const v = c / 255;
+            return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+          };
+          const lr = Math.max(0.001, toLin(r));
+          const lg = Math.max(0.001, toLin(g));
+          const lb = Math.max(0.001, toLin(b));
+
+          const X = lr * 0.4124 + lg * 0.3576 + lb * 0.1805;
+          const Y = lr * 0.2126 + lg * 0.7152 + lb * 0.0722;
+          const Z = lr * 0.0193 + lg * 0.1192 + lb * 0.9505;
+          const sumXYZ = Math.max(0.0001, X + Y + Z);
+          const x = X / sumXYZ;
+          const y = Y / sumXYZ;
+
+          const n = (x - 0.332) / (0.1858 - y || 0.001);
+          const rawCct = 449 * n ** 3 + 3525 * n ** 2 + 6823.3 * n + 5520.33;
+          kelvin = Math.max(2000, Math.min(11000, Math.round(rawCct / 10) * 10));
+
+          tempLabel =
+            kelvin < 3400
+              ? 'Warm Tungsten'
+              : kelvin < 4600
+                ? 'Warm Golden'
+                : kelvin < 6000
+                  ? 'Neutral Daylight'
+                  : kelvin < 7500
+                    ? 'Cool Overcast'
+                    : 'Cool Shade';
+
+          // Green-Magenta tint estimate from channel balance
+          tint = Math.round(((r + b) / 2 - g) * 0.45);
+        }
+      } catch {
+        // fallback defaults
+      }
+    }
+
+    res.json({
+      whiteBalance: {
+        mode: exifWb || 'Estimated',
+        lightSource,
+        colorSpace: colorSpace || 'sRGB',
+        kelvin,
+        tempLabel,
+        tint,
+        rgbMeans,
+        rgbGains,
+      },
+      exposure: {
+        iso,
+        fNumber,
+        exposureTime,
+        focalLength,
+      },
+    });
+  });
+
   // ---------- Natural Language AI Search ----------
   app.post('/api/search', async (req, res) => {
     try {
@@ -533,6 +726,9 @@ export function createApp() {
         ),
         usedAiVerify: result.usedAiVerify,
         usedEmbeddings: result.usedEmbeddings,
+        pendingCount: result.pendingCount,
+        hasApiKey: result.hasApiKey,
+        warning: result.warning,
       });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
@@ -552,7 +748,21 @@ export function createApp() {
   });
 
   // ---------- Sort & Organize Studio ----------
-  app.post('/api/sort/plan', (req, res) => {
+  app.post('/api/sort/parse-prompt', async (req, res) => {
+    try {
+      const prompt = String(req.body?.prompt || '').trim();
+      if (!prompt) {
+        res.status(400).json({ error: 'Prompt is required.' });
+        return;
+      }
+      const parsed = await parseSortPromptWithGemini(prompt);
+      res.json(parsed);
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  app.post('/api/sort/plan', async (req, res) => {
     try {
       const preset = (req.body?.preset || 'media-type') as SortPreset;
       const targetRoot = String(req.body?.targetRoot || '').trim();
@@ -560,9 +770,17 @@ export function createApp() {
         res.status(400).json({ error: 'Target folder path is required.' });
         return;
       }
+      if (req.body?.classifyFirst && loadSettings().apiKey) {
+        await startIndexingQueue(false);
+      }
       const plan = buildSortPlan({
         preset,
         targetRoot,
+        folderPattern: req.body?.folderPattern ? String(req.body.folderPattern) : undefined,
+        filenamePattern: req.body?.filenamePattern || 'original',
+        mediaFilter: req.body?.mediaFilter || 'all',
+        duplicatePolicy: req.body?.duplicatePolicy || 'rename',
+        separateScreenshots: Boolean(req.body?.separateScreenshots),
         folderId: req.body?.folderId ? Number(req.body.folderId) : null,
         mediaIds: Array.isArray(req.body?.mediaIds) ? req.body.mediaIds : undefined,
       });
@@ -572,7 +790,7 @@ export function createApp() {
     }
   });
 
-  app.post('/api/sort/execute', (req, res) => {
+  app.post('/api/sort/execute', async (req, res) => {
     try {
       const preset = (req.body?.preset || 'media-type') as SortPreset;
       const mode = req.body?.mode === 'move' ? 'move' : 'copy';
@@ -581,13 +799,21 @@ export function createApp() {
         res.status(400).json({ error: 'Target folder path is required.' });
         return;
       }
+      if (req.body?.classifyFirst && loadSettings().apiKey) {
+        await startIndexingQueue(false);
+      }
       const result = executeSortPlan({
         preset,
         targetRoot,
         mode,
+        folderPattern: req.body?.folderPattern ? String(req.body.folderPattern) : undefined,
+        filenamePattern: req.body?.filenamePattern || 'original',
+        mediaFilter: req.body?.mediaFilter || 'all',
+        duplicatePolicy: req.body?.duplicatePolicy || 'rename',
+        separateScreenshots: Boolean(req.body?.separateScreenshots),
         folderId: req.body?.folderId ? Number(req.body.folderId) : null,
         mediaIds: Array.isArray(req.body?.mediaIds) ? req.body.mediaIds : undefined,
-        cleanupEmptyDirs: Boolean(req.body?.cleanupEmptyDirs),
+        cleanupEmptyDirs: req.body?.cleanupEmptyDirs !== false,
       });
       res.json(result);
     } catch (err) {

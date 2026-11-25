@@ -8,7 +8,7 @@ import {
   Images,
   RefreshCw,
   Settings,
-  Sparkles,
+  Tag,
   Trash2,
   Zap,
 } from 'lucide-react';
@@ -69,31 +69,33 @@ export function Sidebar({
   const years = Array.from(yearsMap.entries()).sort((a, b) => b[0] - a[0]);
 
   const navBtn = (isActive: boolean) =>
-    `w-full flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-all ${
+    `w-full flex items-center justify-between px-3 py-2 rounded-xl text-sm font-medium transition-colors duration-150 cursor-pointer ${
       isActive
-        ? 'bg-violet-500/15 text-violet-300 border border-violet-500/30 shadow-sm'
-        : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60 border border-transparent'
+        ? 'bg-[#b8f34d]/15 text-[#b8f34d] border border-[#b8f34d]/30'
+        : 'text-zinc-400 hover:text-zinc-100 hover:bg-white/[0.05] border border-transparent'
     }`;
 
   const content = (
-    <div className="flex flex-col h-full bg-zinc-950/95 border-r border-zinc-800/80 w-72 select-none">
-      {/* Brand Header */}
-      <div className="px-4 py-4 border-b border-zinc-800/80 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 via-fuchsia-500 to-indigo-500 flex items-center justify-center shadow-lg shadow-violet-500/20">
-            <Sparkles className="w-5 h-5 text-white" />
+    <div className="flex flex-col h-full bg-[#090a0c] border-r border-white/[0.07] w-72 select-none">
+      {/* Brand Header — Clean typographic wordmark (Reference 1 style, zero cliché icons) */}
+      <div className="px-4 py-4 border-b border-white/[0.07] flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="px-2 py-1 border border-white/25 text-[11px] font-display font-black tracking-[0.2em] text-white uppercase">
+            LV
           </div>
           <div>
-            <h1 className="font-display font-bold text-base text-zinc-100 leading-tight">
-              Lumina Vault
+            <h1 className="font-display font-bold text-sm tracking-[0.14em] uppercase text-white leading-tight">
+              LUMINA
             </h1>
-            <p className="text-[11px] text-zinc-400">Gemini AI Media Organizer</p>
+            <p className="text-[10px] font-mono uppercase tracking-widest text-zinc-500">
+              Media Archive
+            </p>
           </div>
         </div>
         <button
           onClick={onOpenSettings}
-          title="Settings & Gemini API"
-          className="p-2 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/80 transition-colors"
+          title="Settings & API Key"
+          className="p-2 rounded-full text-zinc-400 hover:text-white hover:bg-white/10 transition-colors cursor-pointer"
         >
           <Settings className="w-4 h-4" />
         </button>
@@ -106,7 +108,7 @@ export function Sidebar({
             onOpenConnectModal();
             onCloseMobile();
           }}
-          className="w-full flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white text-sm font-semibold shadow-lg shadow-violet-600/20 transition-all cursor-pointer"
+          className="w-full flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-full bg-[#b8f34d] hover:bg-[#c8f76c] text-zinc-950 text-xs font-bold uppercase tracking-wider transition-transform duration-150 hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
         >
           <FolderPlus className="w-4 h-4" />
           Connect Any Folder
@@ -284,7 +286,7 @@ export function Sidebar({
                   className={navBtn(isActive)}
                 >
                   <span className="truncate flex items-center gap-2">
-                    <Sparkles className="w-3.5 h-3.5 text-violet-400/80 shrink-0" />
+                    <Tag className="w-3.5 h-3.5 text-zinc-500 shrink-0" />
                     <span className="truncate">{cat.category}</span>
                   </span>
                   <span className="text-xs text-zinc-500 ml-2">{cat.count}</span>

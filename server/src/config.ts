@@ -50,7 +50,7 @@ export interface AppSettings {
 const DEFAULT_SETTINGS: AppSettings = {
   apiKey: process.env.GEMINI_API_KEY || '',
   apiMode: 'auto',
-  visionModel: 'gemini-2.5-flash',
+  visionModel: 'gemini-3.5-flash-lite',
   embeddingModel: 'gemini-embedding-001',
   concurrency: 3,
   autoIndexOnScan: true,

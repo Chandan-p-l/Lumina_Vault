@@ -84,6 +84,24 @@ export interface VaultStatus {
     lastError: string | null;
     resolvedEndpointMode: 'gemini' | 'vertex' | null;
   };
+  sortProgress?: {
+    sorting: boolean;
+    mode: 'copy' | 'move';
+    preset: SortPreset;
+    targetRoot: string | null;
+    totalFiles: number;
+    processedFiles: number;
+    createdFolders: string[];
+    recentMoves: Array<{
+      mediaId: number;
+      filename: string;
+      mediaType: 'photo' | 'video';
+      toFolder: string;
+      thumbUrl: string | null;
+    }>;
+    operationId: string | null;
+    error: string | null;
+  };
   hasApiKey: boolean;
 }
 
@@ -100,13 +118,29 @@ export type SortPreset =
   | 'media-type-category'
   | 'year-month'
   | 'year-category'
-  | 'category-year';
+  | 'category-year'
+  | 'custom';
+
+export type FilenamePattern = 'original' | 'date_original' | 'date_caption' | 'sequence';
+export type DuplicatePolicy = 'rename' | 'separate_folder' | 'skip';
+
+export interface SortRuleConfig {
+  preset: SortPreset;
+  folderPattern?: string;
+  filenamePattern?: FilenamePattern;
+  mediaFilter?: 'all' | 'photo' | 'video';
+  duplicatePolicy?: DuplicatePolicy;
+  separateScreenshots?: boolean;
+  classifyFirst?: boolean;
+}
 
 export interface SortPlanResult {
   preset: SortPreset;
+  folderPattern: string;
   targetRoot: string;
   totalFiles: number;
   unchangedFiles: number;
+  skippedDuplicates: number;
   items: Array<{
     mediaId: number;
     filename: string;
@@ -117,6 +151,7 @@ export interface SortPlanResult {
     category: string;
     year: number;
     month: number;
+    isDuplicate?: boolean;
   }>;
   folderTree: Array<{ folder: string; count: number; sampleFiles: string[] }>;
 }
@@ -141,6 +176,25 @@ export interface SettingsData {
   autoIndexOnScan: boolean;
   defaultSortMode: 'copy' | 'move';
   resolvedEndpointMode?: 'gemini' | 'vertex' | null;
+}
+
+export interface MediaTelemetry {
+  whiteBalance: {
+    mode: string;
+    lightSource: string | null;
+    colorSpace: string;
+    kelvin: number;
+    tempLabel: string;
+    tint: number;
+    rgbMeans: { r: number; g: number; b: number };
+    rgbGains: { r: number; g: number; b: number };
+  };
+  exposure: {
+    iso: number | null;
+    fNumber: number | null;
+    exposureTime: number | null;
+    focalLength: number | null;
+  };
 }
 
 export type NavSection =

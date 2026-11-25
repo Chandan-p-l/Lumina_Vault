@@ -5,9 +5,9 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  FolderTree,
   HardDrive,
   Loader2,
-  Sparkles,
   UploadCloud,
   X,
 } from 'lucide-react';
@@ -27,7 +27,7 @@ declare global {
 interface FolderPickerModalProps {
   open: boolean;
   onClose: () => void;
-  onConnected: () => void;
+  onConnected: (info?: { folderId: number; autoOrganize: boolean; preset: SortPreset; path: string }) => void;
 }
 
 export function FolderPickerModal({ open, onClose, onConnected }: FolderPickerModalProps) {
@@ -35,6 +35,10 @@ export function FolderPickerModal({ open, onClose, onConnected }: FolderPickerMo
   const [manualPath, setManualPath] = useState('');
   const [autoOrganize, setAutoOrganize] = useState(true);
   const [organizePreset, setOrganizePreset] = useState<SortPreset>('media-type');
+  const [customPattern, setCustomPattern] = useState('{type}/{year}/{month_name}');
+  const [customPrompt, setCustomPrompt] = useState('');
+  const [parsingPrompt, setParsingPrompt] = useState(false);
+  const [separateScreenshots, setSeparateScreenshots] = useState(true);
   const [watchEnabled, setWatchEnabled] = useState(true);
   const [loading, setLoading] = useState(false);
   const [connecting, setConnecting] = useState(false);
@@ -70,13 +74,25 @@ export function FolderPickerModal({ open, onClose, onConnected }: FolderPickerMo
     setConnecting(true);
     setError(null);
     try {
-      await api.connectFolder({
+      const res = await api.connectFolder({
         path: pathToConnect,
         autoOrganize,
         organizePreset,
         watchEnabled: watchEnabled || autoOrganize,
+        organizeRule: autoOrganize
+          ? {
+              preset: organizePreset,
+              folderPattern: organizePreset === 'custom' ? customPattern : undefined,
+              separateScreenshots,
+            }
+          : undefined,
       });
-      onConnected();
+      onConnected({
+        folderId: res.folder.id,
+        autoOrganize,
+        preset: organizePreset,
+        path: res.folder.path,
+      });
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to connect folder');
@@ -264,8 +280,8 @@ export function FolderPickerModal({ open, onClose, onConnected }: FolderPickerMo
             <div className="flex items-start justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold text-emerald-300 flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5" />
-                  Auto-Create Folders & Move Photos/Videos
+                  <FolderTree className="w-3.5 h-3.5" />
+                  Auto-Create Folders &amp; Move Photos/Videos
                 </p>
                 <p className="text-[11px] text-zinc-400 mt-0.5">
                   Automatically creates separate <code>Photos/</code> &amp; <code>Videos/</code>{' '}
@@ -281,26 +297,77 @@ export function FolderPickerModal({ open, onClose, onConnected }: FolderPickerMo
             </div>
 
             {autoOrganize && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-                <select
-                  value={organizePreset}
-                  onChange={(e) => setOrganizePreset(e.target.value as SortPreset)}
-                  className="px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-200 outline-none"
-                >
-                  <option value="media-type">Photos &amp; Videos / Year / Month</option>
-                  <option value="media-type-category">
-                    Photos &amp; Videos / AI Category / Year
-                  </option>
-                  <option value="year-month">Year / Month / Photos &amp; Videos</option>
-                </select>
-                <label className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-300 cursor-pointer">
+              <div className="space-y-2.5 pt-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <select
+                    value={organizePreset}
+                    onChange={(e) => setOrganizePreset(e.target.value as SortPreset)}
+                    className="px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-200 outline-none"
+                  >
+                    <option value="media-type">Photos &amp; Videos / Year / Month</option>
+                    <option value="media-type-category">
+                      Photos &amp; Videos / AI Category / Year
+                    </option>
+                    <option value="year-month">Year / Month / Photos &amp; Videos</option>
+                    <option value="custom">Custom Folder Pattern...</option>
+                  </select>
+                  <label className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-300 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={watchEnabled}
+                      onChange={(e) => setWatchEnabled(e.target.checked)}
+                      className="accent-emerald-500"
+                    />
+                    Watch live for newly added files
+                  </label>
+                </div>
+
+                {organizePreset === 'custom' && (
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={customPrompt}
+                        onChange={(e) => setCustomPrompt(e.target.value)}
+                        placeholder='Describe in English: "separate by category and year"'
+                        className="flex-1 px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-zinc-100 outline-none focus:border-emerald-500"
+                      />
+                      <button
+                        type="button"
+                        disabled={parsingPrompt || !customPrompt.trim()}
+                        onClick={async () => {
+                          setParsingPrompt(true);
+                          try {
+                            const res = await api.parseSortPrompt(customPrompt);
+                            setCustomPattern(res.folderPattern);
+                            setSeparateScreenshots(res.separateScreenshots);
+                          } finally {
+                            setParsingPrompt(false);
+                          }
+                        }}
+                        className="px-3 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 text-xs font-medium cursor-pointer"
+                      >
+                        {parsingPrompt ? 'Parsing...' : 'Use Prompt'}
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={customPattern}
+                      onChange={(e) => setCustomPattern(e.target.value)}
+                      placeholder="{type}/{category}/{year}/{month_name}"
+                      className="w-full px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-mono text-zinc-100 outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                )}
+
+                <label className="flex items-center gap-2 text-[11px] text-zinc-300 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={watchEnabled}
-                    onChange={(e) => setWatchEnabled(e.target.checked)}
+                    checked={separateScreenshots}
+                    onChange={(e) => setSeparateScreenshots(e.target.checked)}
                     className="accent-emerald-500"
                   />
-                  Watch live for newly added files
+                  Put screenshots into their own Screenshots/ folder
                 </label>
               </div>
             )}

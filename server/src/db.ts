@@ -102,6 +102,9 @@ if (!folderColNames.has('organize_target')) {
 if (!folderColNames.has('watch_enabled')) {
   db.exec(`ALTER TABLE folders ADD COLUMN watch_enabled INTEGER NOT NULL DEFAULT 0`);
 }
+if (!folderColNames.has('organize_rule_json')) {
+  db.exec(`ALTER TABLE folders ADD COLUMN organize_rule_json TEXT`);
+}
 
 export interface FolderRow {
   id: number;
@@ -114,6 +117,7 @@ export interface FolderRow {
   organize_preset: string;
   organize_target: string | null;
   watch_enabled: number;
+  organize_rule_json: string | null;
 }
 
 export interface MediaRow {
